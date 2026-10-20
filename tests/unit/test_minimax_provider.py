@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import importlib
+import importlib.util
 import json
+import socket
 from typing import Any
 
 import httpx
@@ -27,11 +30,39 @@ FLASH = "MiniMax-M3.1-Flash"
 def requests(monkeypatch: pytest.MonkeyPatch) -> list[httpx.Request]:
     """Keep LangChain, SDKs and serialization real; intercept only HTTP transport."""
     captured: list[httpx.Request] = []
+    http_libraries = [httpx]
+    if importlib.util.find_spec("httpx2") is not None:
+        http_libraries.append(importlib.import_module("httpx2"))
+
+    def deny_network(*_args: Any, **_kwargs: Any) -> None:
+        raise AssertionError("SDK transport tests must not open network connections")
+
+    monkeypatch.setattr(socket.socket, "connect", deny_network)
+    monkeypatch.setattr(socket.socket, "connect_ex", deny_network)
 
     def respond(_transport: httpx.HTTPTransport, request: httpx.Request) -> httpx.Response:
         request.read()
         captured.append(request)
-        model = json.loads(request.content)["model"]
+        request_body = json.loads(request.content)
+        model = request_body["model"]
+        library = next(library for library in http_libraries if isinstance(request, library.Request))
+        if request_body.get("stream"):
+            chunks = [
+                {"role": "assistant", "reasoning_content": "Keep "},
+                {"reasoning_content": "this reasoning."},
+                {"content": "ok"},
+            ]
+            events = [
+                {
+                    "id": "chatcmpl_test",
+                    "object": "chat.completion.chunk",
+                    "model": model,
+                    "choices": [{"index": 0, "delta": delta, "finish_reason": None}],
+                }
+                for delta in chunks
+            ]
+            stream = "".join(f"data: {json.dumps(event)}\n\n" for event in events) + "data: [DONE]\n\n"
+            return library.Response(200, content=stream, headers={"content-type": "text/event-stream"}, request=request)
         if request.url.path.endswith("/messages"):
             body = {
                 "id": "msg_test",
@@ -49,12 +80,24 @@ def requests(monkeypatch: pytest.MonkeyPatch) -> list[httpx.Request]:
                 "object": "chat.completion",
                 "created": 0,
                 "model": model,
-                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "ok", "reasoning_content": "Keep this reasoning."},
+                        "finish_reason": "stop",
+                    }
+                ],
                 "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
             }
-        return httpx.Response(200, json=body, request=request)
+        return library.Response(200, json=body, request=request)
 
-    monkeypatch.setattr(httpx.HTTPTransport, "handle_request", respond)
+    async def arespond(transport: Any, request: Any) -> Any:
+        await request.aread()
+        return respond(transport, request)
+
+    for library in http_libraries:
+        monkeypatch.setattr(library.HTTPTransport, "handle_request", respond)
+        monkeypatch.setattr(library.AsyncHTTPTransport, "handle_async_request", arespond)
     monkeypatch.setenv("LANGCHAIN_TRACING_V2", "false")
     monkeypatch.setenv("LANGSMITH_TRACING", "false")
     monkeypatch.delenv("LLM_MODEL", raising=False)
@@ -198,6 +241,12 @@ def test_multimodal_and_tool_history_on_wire(
         {"type": "text", "text": "Look up this picture."},
         {"type": "image_url", "image_url": {"url": image_url}},
     ]
+    video = (
+        {"type": "video", "source": {"type": "url", "url": "https://example.test/video.mp4"}}
+        if base_url.endswith("/anthropic")
+        else {"type": "video_url", "video_url": {"url": "https://example.test/video.mp4"}}
+    )
+    content.append(video)
     assistant_content = (
         [{"type": "thinking", "thinking": "Keep this reasoning.", "signature": "test-signature"}]
         if base_url.endswith("/anthropic")
@@ -205,13 +254,18 @@ def test_multimodal_and_tool_history_on_wire(
     )
     history = [
         HumanMessage(content=content),
-        AIMessage(content=assistant_content, tool_calls=[{"id": "call_test", "name": "lookup", "args": {}}]),
+        AIMessage(
+            content=assistant_content,
+            additional_kwargs={"reasoning_content": "Keep this reasoning."},
+            tool_calls=[{"id": "call_test", "name": "lookup", "args": {}}],
+        ),
         ToolMessage(content="Found it.", tool_call_id="call_test"),
     ]
     factory.get_llm().bind_tools([tool]).invoke(history)
     body = payload(requests, base_url)
     assert body["model"] == FLASH
     assert body["tools"]
+    assert body["messages"][0]["content"][2] == video
     if base_url.endswith("/anthropic"):
         assert body["messages"][0]["content"][1] == {"type": "image", "source": {"type": "url", "url": image_url}}
         assert body["messages"][1]["content"][0] == assistant_content[0]
@@ -222,3 +276,41 @@ def test_multimodal_and_tool_history_on_wire(
         assert body["messages"][1]["tool_calls"][0]["id"] == "call_test"
         assert body["messages"][2]["tool_call_id"] == "call_test"
         assert body["messages"][2]["content"] == "Found it."
+        assert body["messages"][1]["reasoning_content"] == "Keep this reasoning."
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("base_url", ENDPOINTS)
+async def test_async_default_request(
+    monkeypatch: pytest.MonkeyPatch, requests: list[httpx.Request], base_url: str
+) -> None:
+    configure(monkeypatch, base_url)
+    llm = factory.get_llm()
+    answer = await llm.ainvoke("Hello")
+    assert payload(requests, base_url)["model"] == FLASH
+    if not base_url.endswith("/anthropic"):
+        assert answer.additional_kwargs["reasoning_content"] == "Keep this reasoning."
+        requests.clear()
+        await llm.ainvoke([HumanMessage(content="Hello"), answer, HumanMessage(content="Continue")])
+        assert payload(requests, base_url)["messages"][1]["reasoning_content"] == "Keep this reasoning."
+
+
+@pytest.mark.parametrize("base_url", ENDPOINTS[:2])
+@pytest.mark.parametrize("streaming", [False, True])
+def test_openai_reasoning_response_replayed(
+    monkeypatch: pytest.MonkeyPatch, requests: list[httpx.Request], base_url: str, streaming: bool
+) -> None:
+    configure(monkeypatch, base_url)
+    llm = factory.get_llm()
+    if streaming:
+        chunks = list(llm.stream("Hello"))
+        answer = chunks[0]
+        for chunk in chunks[1:]:
+            answer += chunk
+    else:
+        answer = llm.invoke("Hello")
+    assert answer.additional_kwargs["reasoning_content"] == "Keep this reasoning."
+    requests.clear()
+    llm.invoke([HumanMessage(content="Hello"), answer, HumanMessage(content="Continue")])
+    body = payload(requests, base_url)
+    assert body["messages"][1]["reasoning_content"] == "Keep this reasoning."

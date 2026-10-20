@@ -98,10 +98,10 @@ def get_llm(
             )
 
         try:
-            from langchain_openai import ChatOpenAI
+            from agentic_architectures.llm.minimax import ChatMiniMax
         except ImportError as e:
             raise ImportError("MiniMax provider requires `pip install agentic-architectures[minimax]`") from e
-        return ChatOpenAI(
+        return ChatMiniMax(
             model=model,
             temperature=temperature,
             api_key=api_key,
