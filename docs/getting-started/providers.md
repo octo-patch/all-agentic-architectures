@@ -13,8 +13,8 @@ llm = get_llm()
 # Override per-call
 llm = get_llm(provider="openai", model="gpt-4o-mini", temperature=0.4)
 llm = get_llm(provider="anthropic", model="claude-haiku-4-5-20251001")
+llm = get_llm(provider="minimax", model="MiniMax-M3.1-Flash")
 llm = get_llm(provider="minimax", model="MiniMax-M3")
-llm = get_llm(provider="minimax", model="MiniMax-M2.7")
 llm = get_llm(provider="ollama", model="llama3.3:70b")
 ```
 
@@ -38,7 +38,7 @@ arch = Reflection(llm=llm)
 | **Fireworks** | `[fireworks]` | `FIREWORKS_API_KEY` | Function-calling first-class. |
 | **Mistral** | `[mistral]` | `MISTRAL_API_KEY` | EU-hosted option. |
 | **Google** | `[google]` | `GOOGLE_API_KEY` | Gemini-2.x via Generative AI API. |
-| **MiniMax** | `[minimax]` | `MINIMAX_API_KEY` | MiniMax-M3 and MiniMax-M2.7 through OpenAI- or Anthropic-compatible APIs. |
+| **MiniMax** | `[minimax]` | `MINIMAX_API_KEY` | MiniMax-M3.1-Flash (default) and MiniMax-M3 through OpenAI- or Anthropic-compatible APIs. |
 
 ## Environment configuration
 
@@ -74,17 +74,39 @@ OpenAI client.
 Keep the Anthropic base URL ending at `/anthropic`; the client appends
 `/v1/messages` when it sends a request.
 
+When MiniMax is selected and `LLM_MODEL` is unset, `get_llm()` defaults to
+`MiniMax-M3.1-Flash`. Explicit `model=` arguments and configured `LLM_MODEL`
+values, including custom or legacy IDs, are passed through unchanged. If you
+copied `.env.example`, replace its `LLM_MODEL` with `MiniMax-M3.1-Flash` or
+remove that entry to use the MiniMax default.
+
 | Model | Total context window | Input modalities | Thinking |
 |---|---:|---|---|
-| `MiniMax-M3` | 1,000,000 tokens | Text, image, video | `adaptive` or `disabled`; the protocol controls the default |
-| `MiniMax-M2.7` | 204,800 tokens | Text | Always on |
+| `MiniMax-M3.1-Flash` (default) | 1,000,000 tokens | Text, image, video | Always adaptive; `disabled` is rejected |
+| `MiniMax-M3` | 1,000,000 tokens | Text, image, video | `adaptive` or `disabled`; defaults on through OpenAI and off through Anthropic |
 
-Pay-as-you-go prices below are in USD per million tokens.
+Flash supports up to 524,288 output tokens. Its thinking effort accepts `low`,
+`medium`, `high`, `xhigh`, and `max` (the default); `none` is rejected. Pass
+`reasoning_effort="high"` to `get_llm()` for the OpenAI-compatible endpoint, or
+`model_kwargs={"output_config": {"effort": "high"}}` for the Anthropic-compatible
+endpoint. MiniMax-M3 does not tune thinking depth with effort. Flash does not
+support `service_tier` or `reasoning_split=false`. Preserve complete assistant
+thinking and tool-call content when supplying conversation history.
 
-| Model | Input | Output | Cache read | Cache write |
-|---|---:|---:|---:|---:|
-| `MiniMax-M3` | $0.60 | $2.40 | $0.12 | N/A |
-| `MiniMax-M2.7` | $0.30 | $1.20 | $0.06 | $0.375 |
+Pay-as-you-go standard prices below are in USD per million tokens. MiniMax-M3
+priority pricing is 1.5 times standard pricing; Flash has no priority tier.
+
+| Model / input length | Input | Output | Cache read |
+|---|---:|---:|---:|
+| `MiniMax-M3.1-Flash` | $0.15 | $0.60 | $0.015 |
+| `MiniMax-M3`, up to 512k | $0.30 | $1.20 | $0.06 |
+| `MiniMax-M3`, above 512k | $0.60 | $2.40 | $0.12 |
+
+See the official [model guide](https://platform.minimax.io/docs/guides/models-intro),
+[pricing](https://platform.minimax.io/docs/pricing/overview), and
+[Anthropic compatibility reference](https://platform.minimax.io/docs/api-reference/text-anthropic-api)
+for current limits and availability. Legacy IDs remain caller-controlled; their
+continued availability depends on the endpoint.
 
 ## When you'd override per-architecture
 

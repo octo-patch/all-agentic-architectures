@@ -296,7 +296,7 @@ Patterns that appear across families.
 <tr><td>Fireworks</td><td><code>[fireworks]</code></td><td>Function-calling first-class</td></tr>
 <tr><td>Mistral</td><td><code>[mistral]</code></td><td>EU-hosted option</td></tr>
 <tr><td>Google</td><td><code>[google]</code></td><td>Gemini 2.x via Generative AI API</td></tr>
-<tr><td>MiniMax</td><td><code>[minimax]</code></td><td>MiniMax-M3 and MiniMax-M2.7 via OpenAI- or Anthropic-compatible APIs</td></tr>
+<tr><td>MiniMax</td><td><code>[minimax]</code></td><td>MiniMax-M3.1-Flash (default) and MiniMax-M3 via OpenAI- or Anthropic-compatible APIs</td></tr>
 </table>
 
 Switch via `LLM_PROVIDER` + the corresponding key in `.env`. No code changes.

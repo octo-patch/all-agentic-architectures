@@ -95,10 +95,10 @@ PROVIDERS: dict[str, ProviderInfo] = {
         name="MiniMax",
         signup_url="https://platform.minimax.io",
         docs_url="https://platform.minimax.io/docs/api-reference/api-overview",
-        recommended_model="MiniMax-M3",
+        recommended_model="MiniMax-M3.1-Flash",
         notes=(
-            "MiniMax-M3 (1,000,000-token context) and MiniMax-M2.7 "
-            "(204,800-token context) through OpenAI- or Anthropic-compatible APIs."
+            "MiniMax-M3.1-Flash (default) and MiniMax-M3, both with 1,000,000-token "
+            "context, through OpenAI- or Anthropic-compatible APIs."
         ),
     ),
 }

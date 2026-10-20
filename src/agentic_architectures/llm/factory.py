@@ -58,6 +58,10 @@ def get_llm(
     integration package isn't installed.
     """
     provider = provider or settings.llm_provider
+    if model is None and provider == "minimax" and "llm_model" not in settings.model_fields_set:
+        from agentic_architectures.llm.providers import PROVIDERS
+
+        model = PROVIDERS["minimax"].recommended_model
     model = model or settings.llm_model
     temperature = temperature if temperature is not None else settings.llm_temperature
 
